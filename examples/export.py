@@ -122,8 +122,12 @@ def normalize_color(color: torch.Tensor, is_color_in_range_0_255: bool = False) 
     return color.float()
 
 # assuming uniform kernel size, stride, padding
-# assuming input_data is 5D tensor
-def im2col_3d(input_data, kernel_size, stride=1, padding=0):
+# assuming input_data is 5D tensor, in sparse tensor format
+def im2col_3d(input_sparse, kernel_size, stride=1, padding=0):
+    assert stride == 1, "stride must be 1"
+    # convert to dense tensor
+    input_data, min_coordinate, tensor_stride = input_sparse.dense(min_coordinate=torch.IntTensor([0, 0, 0]))
+
     if padding > 0:
         input_data = torch.nn.functional.pad(input_data, (padding, padding, padding, padding, padding, padding))
 
@@ -136,6 +140,12 @@ def im2col_3d(input_data, kernel_size, stride=1, padding=0):
     out_width = math.ceil((width - kernel_size + 1) / stride)
 
     # Create the output matrix
+    # not enforcing output sparsity pattern
+    col_unconstrained = torch.zeros(
+        (batch_size, channels, kernel_size, kernel_size, kernel_size, out_depth, out_height, out_width),
+        device=input_data.device
+    )
+    # enforced output sparsity pattern
     col = torch.zeros(
         (batch_size, channels, kernel_size, kernel_size, kernel_size, out_depth, out_height, out_width),
         device=input_data.device
@@ -148,7 +158,18 @@ def im2col_3d(input_data, kernel_size, stride=1, padding=0):
             y_max = y + stride * out_height
             for x in range(0, kernel_size):
                 x_max = x + stride * out_width
-                col[:, :, z, y, x, :, :, :] = input_data[:, :, z:z_max:stride, y:y_max:stride, x:x_max:stride]
+                col_unconstrained[:, :, z, y, x, :, :, :] = input_data[:, :, z:z_max:stride, y:y_max:stride, x:x_max:stride]
+
+    # enforce output sparsity pattern
+    # only non zero output when input at the same coordinate is non-zero
+    for i in range(input_sparse.coordinates.shape[0]):
+        crds = input_sparse.coordinates[i].tolist()
+        batch = crds[0]
+        # sparse_crd = min_crd + tensor_stride * dense_crd
+        z = (crds[1] - min_coordinate[0]) // tensor_stride[0]
+        y = (crds[2] - min_coordinate[1]) // tensor_stride[1]
+        x = (crds[3] - min_coordinate[2]) // tensor_stride[2]
+        col[batch, :, :, :, :, z, y, x] = col_unconstrained[batch, :, :, :, :, z, y, x]
 
     col = col.view(batch_size, -1, out_depth*out_height*out_width).transpose(1, 2).contiguous()
     col = col.view(batch_size*out_depth*out_height*out_width, -1)
@@ -159,13 +180,14 @@ def get_activation(name, mode, in_activation, out_activation, kernel_size, strid
     def in_hook(model, input, output):
         for i in range(len(input)):
             in_activation[name+"."+str(i)] = input[i].detach()
-            print(f"[in] {name=} in{i} {input[i].dense(min_coordinate=torch.IntTensor([0, 0, 0]))[0].shape=}")
+            input_dense = input[i].dense(min_coordinate=torch.IntTensor([0, 0, 0]))[0]
+            print(f"[in] {name=} in{i} {input_dense.shape=}")
 
             # Get input dimensions
-            batch_size, channels, depth, height, width = input[i].dense(min_coordinate=torch.IntTensor([0, 0, 0]))[0].size()
-            if depth * height * width < 1000000: # only do im2col for small input
-                col = im2col_3d(input[i].dense(min_coordinate=torch.IntTensor([0, 0, 0]))[0], kernel_size, stride, kernel_size//2)
-                print(f"[im2col] {name=} {kernel_size=} {stride=} {col.shape=}")
+            batch_size, channels, depth, height, width = input_dense.size()
+            if depth * height * width < 1000000 and stride == 1: # only do im2col for small input, can only do stride 1
+                col = im2col_3d(input[i].detach(), kernel_size, stride, kernel_size//2)
+                print(f"[im2col] {name=} {kernel_size=} {stride=} {col.shape=} {torch.count_nonzero(col)=}")
 
             #saveTensor(args, name+"."+str(i), mode, input[i].detach(), unsqueeze)
     def out_hook(model, input, output):

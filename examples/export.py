@@ -23,6 +23,7 @@
 # of the code.
 import os
 import argparse
+import math
 import numpy as np
 from urllib.request import urlretrieve
 
@@ -120,11 +121,52 @@ def normalize_color(color: torch.Tensor, is_color_in_range_0_255: bool = False) 
     color -= 0.5
     return color.float()
 
-def get_activation(name, mode, in_activation, out_activation, unsqueeze=False):
+# assuming uniform kernel size, stride, padding
+# assuming input_data is 5D tensor
+def im2col_3d(input_data, kernel_size, stride=1, padding=0):
+    if padding > 0:
+        input_data = torch.nn.functional.pad(input_data, (padding, padding, padding, padding, padding, padding))
+
+    # Get input dimensions
+    batch_size, channels, depth, height, width = input_data.size()
+
+    # Calculate the dimensions of the output matrix
+    out_depth = math.ceil((depth - kernel_size + 1) / stride)
+    out_height = math.ceil((height - kernel_size + 1) / stride)
+    out_width = math.ceil((width - kernel_size + 1) / stride)
+
+    # Create the output matrix
+    col = torch.zeros(
+        (batch_size, channels, kernel_size, kernel_size, kernel_size, out_depth, out_height, out_width),
+        device=input_data.device
+    )
+
+    # Fill the output matrix with patches from the input data
+    for z in range(0, kernel_size):
+        z_max = z + stride * out_depth
+        for y in range(0, kernel_size):
+            y_max = y + stride * out_height
+            for x in range(0, kernel_size):
+                x_max = x + stride * out_width
+                col[:, :, z, y, x, :, :, :] = input_data[:, :, z:z_max:stride, y:y_max:stride, x:x_max:stride]
+
+    col = col.view(batch_size, -1, out_depth*out_height*out_width).transpose(1, 2).contiguous()
+    col = col.view(batch_size*out_depth*out_height*out_width, -1)
+
+    return col
+
+def get_activation(name, mode, in_activation, out_activation, kernel_size, stride, unsqueeze=False):
     def in_hook(model, input, output):
         for i in range(len(input)):
             in_activation[name+"."+str(i)] = input[i].detach()
             print(f"{name=} in{i} {input[i].dense(min_coordinate=torch.IntTensor([0, 0, 0]))[0].shape=}")
+
+            # Get input dimensions
+            batch_size, channels, depth, height, width = input[i].size()
+            if depth * height * width < 1000000: # only do im2col for small input
+                col = im2col_3d(input[i], kernel_size, stride, kernel_size//2)
+                print(f"{name=} in{i} {col.shape=}")
+
             #saveTensor(args, name+"."+str(i), mode, input[i].detach(), unsqueeze)
     def out_hook(model, input, output):
         out_activation[name] = output.detach()
@@ -150,14 +192,16 @@ if __name__ == '__main__':
 
     in_activation = {}
     out_activation = {}
+    weight = {}
     hooks = []
     for n, m in model.named_modules():
         # export conv
         if isinstance(m, ME.MinkowskiConvolution):
             print(n, m, m.kernel.shape)
             #saveTensor(args, n, 'weight', m.weight) # alexnet have bias, ignore it for now
-            handle1 = m.register_forward_hook(get_activation(n, 'in', in_activation, out_activation))
-            handle2 = m.register_forward_hook(get_activation(n, 'out', in_activation, out_activation))
+            weight[n] = m.kernel.detach()
+            handle1 = m.register_forward_hook(get_activation(n, 'in', in_activation, out_activation, m.kernel_size[0], m.stride[0]))
+            handle2 = m.register_forward_hook(get_activation(n, 'out', in_activation, out_activation, m.kernel_size[0], m.stride[0]))
             hooks.append(handle1)
             hooks.append(handle2)
 

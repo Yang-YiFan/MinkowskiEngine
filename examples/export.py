@@ -166,9 +166,9 @@ def im2col_3d(input_sparse, kernel_size, stride=1, padding=0):
         crds = input_sparse.coordinates[i].tolist()
         batch = crds[0]
         # sparse_crd = min_crd + tensor_stride * dense_crd
-        z = (crds[1] - min_coordinate[0]) // tensor_stride[0]
-        y = (crds[2] - min_coordinate[1]) // tensor_stride[1]
-        x = (crds[3] - min_coordinate[2]) // tensor_stride[2]
+        z = (crds[1] - min_coordinate[0, 0]) // tensor_stride[0]
+        y = (crds[2] - min_coordinate[0, 1]) // tensor_stride[1]
+        x = (crds[3] - min_coordinate[0, 2]) // tensor_stride[2]
         col[batch, :, :, :, :, z, y, x] = col_unconstrained[batch, :, :, :, :, z, y, x]
 
     col = col.view(batch_size, -1, out_depth*out_height*out_width).transpose(1, 2).contiguous()
@@ -181,7 +181,7 @@ def get_activation(name, mode, in_activation, out_activation, kernel_size, strid
         for i in range(len(input)):
             in_activation[name+"."+str(i)] = input[i].detach()
             input_dense = input[i].dense(min_coordinate=torch.IntTensor([0, 0, 0]))[0]
-            print(f"[in] {name=} in{i} {input_dense.shape=}")
+            print(f"[in] {name=} in{i} {input[i].shape=} {input_dense.shape=}")
 
             # Get input dimensions
             batch_size, channels, depth, height, width = input_dense.size()

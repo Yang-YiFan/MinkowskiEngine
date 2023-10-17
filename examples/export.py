@@ -159,18 +159,18 @@ def get_activation(name, mode, in_activation, out_activation, kernel_size, strid
     def in_hook(model, input, output):
         for i in range(len(input)):
             in_activation[name+"."+str(i)] = input[i].detach()
-            print(f"{name=} in{i} {input[i].dense(min_coordinate=torch.IntTensor([0, 0, 0]))[0].shape=}")
+            print(f"[in] {name=} in{i} {input[i].dense(min_coordinate=torch.IntTensor([0, 0, 0]))[0].shape=}")
 
             # Get input dimensions
-            batch_size, channels, depth, height, width = input[i].size()
+            batch_size, channels, depth, height, width = input[i].dense(min_coordinate=torch.IntTensor([0, 0, 0]))[0].size()
             if depth * height * width < 1000000: # only do im2col for small input
-                col = im2col_3d(input[i], kernel_size, stride, kernel_size//2)
-                print(f"{name=} in{i} {col.shape=}")
+                col = im2col_3d(input[i].dense(min_coordinate=torch.IntTensor([0, 0, 0]))[0], kernel_size, stride, kernel_size//2)
+                print(f"[im2col] {name=} {kernel_size=} {stride=} {col.shape=}")
 
             #saveTensor(args, name+"."+str(i), mode, input[i].detach(), unsqueeze)
     def out_hook(model, input, output):
         out_activation[name] = output.detach()
-        print(f"{name=} out {output.dense(min_coordinate=torch.IntTensor([0, 0, 0]))[0].shape=}")
+        print(f"[out] {name=} {output.dense(min_coordinate=torch.IntTensor([0, 0, 0]))[0].shape=}")
         #saveTensor(args, name, mode, output.detach(), unsqueeze)
     if mode == 'in':
         return in_hook
@@ -197,11 +197,11 @@ if __name__ == '__main__':
     for n, m in model.named_modules():
         # export conv
         if isinstance(m, ME.MinkowskiConvolution):
-            print(n, m, m.kernel.shape)
+            print("[weight]", n, m, m.kernel.shape)
             #saveTensor(args, n, 'weight', m.weight) # alexnet have bias, ignore it for now
             weight[n] = m.kernel.detach()
-            handle1 = m.register_forward_hook(get_activation(n, 'in', in_activation, out_activation, m.kernel_size[0], m.stride[0]))
-            handle2 = m.register_forward_hook(get_activation(n, 'out', in_activation, out_activation, m.kernel_size[0], m.stride[0]))
+            handle1 = m.register_forward_hook(get_activation(n, 'in', in_activation, out_activation, m.kernel_generator.kernel_size[0], m.kernel_generator.kernel_stride[0]))
+            handle2 = m.register_forward_hook(get_activation(n, 'out', in_activation, out_activation, m.kernel_generator.kernel_size[0], m.kernel_generator.kernel_stride[0]))
             hooks.append(handle1)
             hooks.append(handle2)
 

@@ -121,6 +121,11 @@ def normalize_color(color: torch.Tensor, is_color_in_range_0_255: bool = False) 
     color -= 0.5
     return color.float()
 
+def EnsureDirExists(dir):
+    if not os.path.exists(dir):
+        print("Creating %s" % dir)
+        os.makedirs(dir)
+
 # assuming uniform kernel size, stride, padding
 # assuming input_data is 5D tensor, in sparse tensor format
 def im2col_3d(input_sparse, kernel_size, stride=1, padding=0):
@@ -176,7 +181,7 @@ def im2col_3d(input_sparse, kernel_size, stride=1, padding=0):
 
     return col
 
-def get_activation(name, mode, in_activation, out_activation, kernel_size, stride, unsqueeze=False):
+def get_activation(name, mode, dir, in_activation, out_activation, kernel_size, stride, unsqueeze=False):
     def in_hook(model, input, output):
         for i in range(len(input)):
             in_activation[name+"."+str(i)] = input[i].detach()
@@ -188,11 +193,12 @@ def get_activation(name, mode, in_activation, out_activation, kernel_size, strid
             if depth * height * width < 1000000 and stride == 1: # only do im2col for small input, can only do stride 1
                 col = im2col_3d(input[i].detach(), kernel_size, stride, kernel_size//2)
                 print(f"[im2col] {name=} {kernel_size=} {stride=} {col.shape=} density {torch.count_nonzero(col)/col.numel()}")
+                np.save(f"{tensor_dir}/in/{name}.{i}.npy", col)
 
-            #saveTensor(args, name+"."+str(i), mode, input[i].detach(), unsqueeze)
     def out_hook(model, input, output):
         out_activation[name] = output.detach()
         print(f"[out] {name=} {output.dense(min_coordinate=torch.IntTensor([0, 0, 0]))[0].shape=}")
+        # TODO: save the output
         #saveTensor(args, name, mode, output.detach(), unsqueeze)
     if mode == 'in':
         return in_hook
@@ -212,18 +218,27 @@ if __name__ == '__main__':
     model.load_state_dict(model_dict)
     model.eval()
 
+    tensor_dir = f"/scratch/yifany/spmspm/inputs"
+    EnsureDirExists(os.path.join(tensor_dir, 'weight'))
+    EnsureDirExists(os.path.join(tensor_dir, 'in'))
+    EnsureDirExists(os.path.join(tensor_dir, 'out'))
+
     in_activation = {}
     out_activation = {}
-    weight = {}
     hooks = []
     for n, m in model.named_modules():
         # export conv
         if isinstance(m, ME.MinkowskiConvolution):
             print("[weight]", n, m, m.kernel.shape)
             #saveTensor(args, n, 'weight', m.weight) # alexnet have bias, ignore it for now
-            weight[n] = m.kernel.detach()
-            handle1 = m.register_forward_hook(get_activation(n, 'in', in_activation, out_activation, m.kernel_generator.kernel_size[0], m.kernel_generator.kernel_stride[0]))
-            handle2 = m.register_forward_hook(get_activation(n, 'out', in_activation, out_activation, m.kernel_generator.kernel_size[0], m.kernel_generator.kernel_stride[0]))
+            weight = m.kernel.detach().transpose(0, 1)
+            C, RS, K = weight.shape
+            weight = weight.view(-1, K).contiguous().cpu().numpy()
+            print("[weight reshaped]", n, m, weight.shape)
+            np.save(f"{tensor_dir}/weight/{n}.npy", weight)
+
+            handle1 = m.register_forward_hook(get_activation(n, 'in', tensor_dir, in_activation, out_activation, m.kernel_generator.kernel_size[0], m.kernel_generator.kernel_stride[0]))
+            handle2 = m.register_forward_hook(get_activation(n, 'out', tensor_dir, in_activation, out_activation, m.kernel_generator.kernel_size[0], m.kernel_generator.kernel_stride[0]))
             hooks.append(handle1)
             hooks.append(handle2)
 

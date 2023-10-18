@@ -186,18 +186,18 @@ def get_activation(name, mode, dir, in_activation, out_activation, kernel_size, 
         for i in range(len(input)):
             in_activation[name+"."+str(i)] = input[i].detach()
             input_dense = input[i].dense(min_coordinate=torch.IntTensor([0, 0, 0]))[0]
-            print(f"[in] {name=} in{i} {input[i].shape=} {input_dense.shape=} density {torch.count_nonzero(input[i].features)/input[i].features.numel()}")
+            print(f"[in] {name=} in{i} {input[i].shape=} {input_dense.shape=} density={torch.count_nonzero(input[i].features)/input[i].features.numel()}")
 
             # Get input dimensions
             batch_size, channels, depth, height, width = input_dense.size()
-            if depth * height * width < 1000000 and stride == 1: # only do im2col for small input, can only do stride 1
+            if stride == 1: # can only do stride 1
                 col = im2col_3d(input[i].detach(), kernel_size, stride, kernel_size//2)
-                print(f"[im2col] {name=} {kernel_size=} {stride=} {col.shape=} density {torch.count_nonzero(col)/col.numel()}")
+                print(f"[im2col] {name=} {kernel_size=} {stride=} {col.shape=} {torch.count_nonzero(col)=} density={torch.count_nonzero(col)/col.numel()}")
                 np.save(f"{tensor_dir}/in/{name}.{i}.npy", col.cpu().numpy())
 
     def out_hook(model, input, output):
         out_activation[name] = output.detach()
-        print(f"[out] {name=} {output.dense(min_coordinate=torch.IntTensor([0, 0, 0]))[0].shape=}")
+        print(f"[out] {name=} {output.shape=} {output.dense(min_coordinate=torch.IntTensor([0, 0, 0]))[0].shape=}")
         # TODO: save the output
         #saveTensor(args, name, mode, output.detach(), unsqueeze)
     if mode == 'in':

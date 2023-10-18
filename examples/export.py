@@ -193,7 +193,7 @@ def get_activation(name, mode, dir, in_activation, out_activation, kernel_size, 
             if depth * height * width < 1000000 and stride == 1: # only do im2col for small input, can only do stride 1
                 col = im2col_3d(input[i].detach(), kernel_size, stride, kernel_size//2)
                 print(f"[im2col] {name=} {kernel_size=} {stride=} {col.shape=} density {torch.count_nonzero(col)/col.numel()}")
-                np.save(f"{tensor_dir}/in/{name}.{i}.npy", col)
+                np.save(f"{tensor_dir}/in/{name}.{i}.npy", col.cpu().numpy())
 
     def out_hook(model, input, output):
         out_activation[name] = output.detach()
@@ -218,7 +218,7 @@ if __name__ == '__main__':
     model.load_state_dict(model_dict)
     model.eval()
 
-    tensor_dir = f"/scratch/yifany/spmspm/inputs"
+    tensor_dir = f"/scratch/yifany/spmspm/inputs/MinkUNet34C"
     EnsureDirExists(os.path.join(tensor_dir, 'weight'))
     EnsureDirExists(os.path.join(tensor_dir, 'in'))
     EnsureDirExists(os.path.join(tensor_dir, 'out'))
@@ -231,9 +231,9 @@ if __name__ == '__main__':
         if isinstance(m, ME.MinkowskiConvolution):
             print("[weight]", n, m, m.kernel.shape)
             #saveTensor(args, n, 'weight', m.weight) # alexnet have bias, ignore it for now
-            weight = m.kernel.detach().transpose(0, 1)
-            C, RS, K = weight.shape
-            weight = weight.view(-1, K).contiguous().cpu().numpy()
+            weight = m.kernel.detach().transpose(0, 1).contiguous()
+            K = weight.shape[-1]
+            weight = weight.view(-1, K).cpu().numpy()
             print("[weight reshaped]", n, m, weight.shape)
             np.save(f"{tensor_dir}/weight/{n}.npy", weight)
 
